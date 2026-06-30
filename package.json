@@ -1,0 +1,32 @@
+{
+  "name": "uptime-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "worker": "tsx watch worker/index.ts",
+    "worker:start": "tsx worker/index.ts",
+    "start:all": "concurrently \"next start\" \"tsx worker/index.ts\""
+  },
+  "dependencies": {
+    "concurrently": "^10.0.3",
+    "dotenv": "^16.4.5",
+    "next": "^16.2.9",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^9.0.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/dotenv": "^8.2.3",
+    "@types/node": "^26.0.1",
+    "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^6.4.15",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "tsx": "^4.16.0",
+    "typescript": "^5"
+  }
+}
