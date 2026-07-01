@@ -26,7 +26,6 @@ async function sendWhatsApp(message: string): Promise<void> {
   const groupId = process.env.WHATSAPP_GROUP_ID;
   const encoded = encodeURIComponent(message);
 
-  // Group ID set hai toh group mein bhejo, warna personal number pe
   const url = groupId
     ? `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encoded}&apikey=${apiKey}&groupid=${groupId}`
     : `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encoded}&apikey=${apiKey}`;
@@ -35,18 +34,14 @@ async function sendWhatsApp(message: string): Promise<void> {
     https.get(url, (res) => {
       res.resume();
       resolve();
-    }).on('error', () => resolve());
+    }).on('error', (err) => {
+      console.error('[WhatsApp] Failed to send:', err.message);
+      resolve();
+    });
   });
 }
 
 type AlertType = 'down' | 'up' | 'ssl_warning' | 'ssl_expired';
-
-const waMessages: Record<AlertType, (name: string, url: string, extra?: string | null) => string> = {
-  down:        (name, url, err) => `🔴 *DOWN*: ${name}\n${url}\nError: ${err || 'Unknown'}\nTime: ${new Date().toLocaleString()}`,
-  up:          (name, url)      => `✅ *RECOVERED*: ${name}\n${url}\nTime: ${new Date().toLocaleString()}`,
-  ssl_warning: (name, url, d)   => `⚠️ *SSL WARNING*: ${name}\n${url}\nDays left: ${d}\nTime: ${new Date().toLocaleString()}`,
-  ssl_expired: (name, url)      => `🔴 *SSL EXPIRED*: ${name}\n${url}\nTime: ${new Date().toLocaleString()}`,
-};
 
 export async function sendAlert(params: {
   monitorName: string;
@@ -54,13 +49,20 @@ export async function sendAlert(params: {
   type: AlertType;
   error?: string | null;
   sslDaysLeft?: number | null;
+  downtimeDuration?: string | null;
 }): Promise<void> {
-  const { monitorName, url, type, error, sslDaysLeft } = params;
-  const extra = type === 'ssl_warning' ? String(sslDaysLeft ?? '') : error;
+  const { monitorName, url, type, error, sslDaysLeft, downtimeDuration } = params;
+
+  const waTexts: Record<AlertType, string> = {
+    down:        `🔴 *DOWN*: ${monitorName}\n${url}\nError: ${error || 'Unknown'}\nTime: ${new Date().toLocaleString()}`,
+    up:          `✅ *RECOVERED*: ${monitorName}\n${url}${downtimeDuration ? `\nDowntime: ${downtimeDuration}` : ''}\nTime: ${new Date().toLocaleString()}`,
+    ssl_warning: `⚠️ *SSL WARNING*: ${monitorName}\n${url}\nDays left: ${sslDaysLeft}\nTime: ${new Date().toLocaleString()}`,
+    ssl_expired: `🔴 *SSL EXPIRED*: ${monitorName}\n${url}\nTime: ${new Date().toLocaleString()}`,
+  };
 
   await Promise.allSettled([
-    sendEmail(params),
-    sendWhatsApp(waMessages[type](monitorName, url, extra)),
+    sendEmail({ monitorName, url, type, error, sslDaysLeft, downtimeDuration }),
+    sendWhatsApp(waTexts[type]),
   ]);
 }
 
@@ -70,12 +72,21 @@ async function sendEmail(params: {
   type: AlertType;
   error?: string | null;
   sslDaysLeft?: number | null;
+  downtimeDuration?: string | null;
 }): Promise<void> {
   const to = process.env.ALERT_TO;
   const from = process.env.ALERT_FROM;
-  if (!to || !from || !process.env.SMTP_USER) return;
 
-  const { monitorName, url, type, error, sslDaysLeft } = params;
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    console.warn('[Email] SMTP_USER or SMTP_PASS not set — skipping email');
+    return;
+  }
+  if (!to || !from) {
+    console.warn('[Email] ALERT_TO or ALERT_FROM not set — skipping email');
+    return;
+  }
+
+  const { monitorName, url, type, error, sslDaysLeft, downtimeDuration } = params;
 
   const subjects: Record<AlertType, string> = {
     down:        `🔴 ALERT: ${monitorName} is DOWN`,
@@ -86,37 +97,43 @@ async function sendEmail(params: {
 
   const bodies: Record<AlertType, string> = {
     down: `
-      <h2 style="color:#dc2626">Site Down Alert</h2>
+      <h2 style="color:#dc2626">🔴 Site Down Alert</h2>
       <p><strong>Monitor:</strong> ${monitorName}</p>
       <p><strong>URL:</strong> <a href="${url}">${url}</a></p>
       <p><strong>Error:</strong> ${error || 'Unknown error'}</p>
       <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
     `,
     up: `
-      <h2 style="color:#16a34a">Site Recovered</h2>
+      <h2 style="color:#16a34a">✅ Site Recovered</h2>
       <p><strong>Monitor:</strong> ${monitorName}</p>
       <p><strong>URL:</strong> <a href="${url}">${url}</a></p>
+      ${downtimeDuration ? `<p><strong>Total Downtime:</strong> ${downtimeDuration}</p>` : ''}
       <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
     `,
     ssl_warning: `
-      <h2 style="color:#d97706">SSL Certificate Warning</h2>
+      <h2 style="color:#d97706">⚠️ SSL Certificate Warning</h2>
       <p><strong>Monitor:</strong> ${monitorName}</p>
       <p><strong>URL:</strong> <a href="${url}">${url}</a></p>
       <p><strong>Days remaining:</strong> ${sslDaysLeft} days</p>
       <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
     `,
     ssl_expired: `
-      <h2 style="color:#dc2626">SSL Certificate Expired</h2>
+      <h2 style="color:#dc2626">🔴 SSL Certificate Expired</h2>
       <p><strong>Monitor:</strong> ${monitorName}</p>
       <p><strong>URL:</strong> <a href="${url}">${url}</a></p>
       <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
     `,
   };
 
-  await getTransporter().sendMail({
-    from: `"Uptime Monitor" <${from}>`,
-    to,
-    subject: subjects[type],
-    html: `<div style="font-family:sans-serif;max-width:600px">${bodies[type]}</div>`,
-  });
+  try {
+    const info = await getTransporter().sendMail({
+      from: `"Uptime Monitor" <${from}>`,
+      to,
+      subject: subjects[type],
+      html: `<div style="font-family:sans-serif;max-width:600px;padding:20px">${bodies[type]}</div>`,
+    });
+    console.log(`[Email] Sent: ${subjects[type]} → ${info.messageId}`);
+  } catch (err) {
+    console.error('[Email] Failed to send:', err);
+  }
 }
